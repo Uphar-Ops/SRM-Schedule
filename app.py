@@ -2,14 +2,14 @@ import streamlit as st
 import pandas as pd
 import re
 import os
-from PyPDF2 import PdfReader
+import pdfplumber
 from io import BytesIO
 import openpyxl
 from openpyxl.styles import Alignment
 
 # Configure the web page
 st.set_page_config(page_title="SRM Schedule Consolidator", page_icon="🤖", layout="centered")
-st.title("SRM Schedule PDF Consolidator 🤖 (v8.0 - Mirror Decoder)") 
+st.title("SRM Schedule PDF Consolidator 🤖 (v9.0 - True Mirror)") 
 st.write("Drag and drop your PDF schedules below to instantly generate your formatted Excel sheet.")
 
 uploaded_files = st.file_uploader("Upload PDF files", type="pdf", accept_multiple_files=True)
@@ -18,91 +18,101 @@ if uploaded_files:
     if st.button("Process Files"):
         all_rows = []
         
-        with st.spinner("Decoding PDF Matrix..."):
+        with st.spinner("Ripping hidden grid and decoding matrix..."):
             for file in uploaded_files:
                 file_name = file.name
                 try:
                     file_bytes = file.getvalue()
-                    reader = PdfReader(BytesIO(file_bytes))
                     
-                    for page_num, page in enumerate(reader.pages):
-                        try:
-                            page_text = page.extract_text()
-                            if not page_text:
-                                continue
+                    # Using pdfplumber to rip the table structure out of the PDF
+                    with pdfplumber.open(BytesIO(file_bytes)) as pdf:
+                        for page_num, page in enumerate(pdf.pages):
+                            try:
+                                # 1. Extract standard surface text
+                                page_text = page.extract_text() or ""
                                 
-                            # ==========================================
-                            # THE MIRROR DECODER (v8.0)
-                            # Detect if the PDF text layer is written backwards
-                            # (e.g. "ssalC" instead of "Class")
-                            # ==========================================
-                            if "ssalC" in page_text or "elbaT" in page_text or "noisseS" in page_text:
-                                page_text = page_text[::-1] # Flips the entire string!
+                                # 2. Extract deep grid text
+                                tables = page.extract_tables()
+                                table_text = ""
+                                for table in tables:
+                                    for row in table:
+                                        table_text += " ".join([str(cell) for cell in row if cell is not None]) + " "
+                                        
+                                combined_text = page_text + " \n " + table_text
                                 
-                            clean_text = re.sub(r'\s+', ' ', page_text)
-                            no_space_text = re.sub(r'\s+', '', page_text)
-                            
-                            # 1. Extract Programme Name
-                            name_without_ext = os.path.splitext(file_name)[0]
-                            if '_' in name_without_ext:
-                                programme = name_without_ext.split('_', 1)[0].strip()
-                            else:
-                                programme = name_without_ext.strip()
-                                
-                            # 2. Smart Subject Extraction
-                            subject_match = re.search(r'Class\s*6\s+(.*?)\s+Class\s*7', clean_text, re.IGNORECASE)
-                            if subject_match:
-                                subject = subject_match.group(1).replace('|', '').strip()
-                            elif '_' in name_without_ext:
-                                subject = name_without_ext.split('_', 1)[1].strip()
-                            else:
-                                subject = "Unknown Subject"
-                                
-                            # 3. Nuclear Date Extraction
-                            raw_dates = re.findall(r'(\d{1,2})[^a-zA-Z0-9]*(\d{1,2})[^a-zA-Z0-9]*(202\d)', no_space_text)
-                            dates = []
-                            for d, m, y in raw_dates:
-                                formatted_date = f"{int(d):02d}/{int(m):02d}/{y}"
-                                if formatted_date not in dates:
-                                    dates.append(formatted_date)
-                            
-                            link_match = re.search(r'https?://[^\s]+', clean_text)
-                            zoom_link = link_match.group(0) if link_match else ""
-                            
-                            day_match = re.search(r'\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b', clean_text)
-                            day = day_match.group(0) if day_match else ""
-                            
-                            # 4. Fix Scrambled Times
-                            time_match = re.search(r'\d{1,2}:\d{2}\s*[AP]M\s*-\s*\d{1,2}:\d{2}\s*[AP]M', clean_text, re.IGNORECASE)
-                            if time_match:
-                                time_str = time_match.group(0)
-                            else:
-                                times = re.findall(r'\d{1,2}:\d{2}', clean_text)
-                                if len(times) >= 2:
-                                    t_ints = [int(t.split(':')[0])*60 + int(t.split(':')[1]) for t in times[:2]]
-                                    sorted_times = [x for _, x in sorted(zip(t_ints, times[:2]))]
-                                    time_str = f"{sorted_times[0]} - {sorted_times[1]} PM"
-                                else:
-                                    time_str = ""
+                                # ==========================================
+                                # THE TRUE MIRROR DECODER (v9.0)
+                                # If the text is backwards, flip the entire string!
+                                # ==========================================
+                                if "ssalC" in combined_text or "elbaT" in combined_text or "6202" in combined_text:
+                                    combined_text = combined_text[::-1]
                                     
-                            # 5. Build the Rows
-                            if dates:
-                                for i, date_val in enumerate(dates):
-                                    all_rows.append({
-                                        'Programme & Semester': programme,
-                                        'Subject Name': subject,
-                                        'Class': f"Class {i+1}",
-                                        'Day': day,
-                                        'Date': date_val,
-                                        'Time (PM)': time_str,
-                                        'Zoom Link': zoom_link
-                                    })
-                            else:
-                                st.warning(f"⚠️ Skipped Page {page_num + 1}. No dates found.")
+                                clean_text = re.sub(r'\s+', ' ', combined_text)
+                                no_space_text = re.sub(r'\s+', '', combined_text)
                                 
-                        except Exception as e:
-                            st.warning(f"⚠️ Error on Page {page_num + 1}: {e}")
-                            
+                                # 1. Extract Programme Name
+                                name_without_ext = os.path.splitext(file_name)[0]
+                                if '_' in name_without_ext:
+                                    programme = name_without_ext.split('_', 1)[0].strip()
+                                else:
+                                    programme = name_without_ext.strip()
+                                    
+                                # 2. Smart Subject Extraction
+                                subject_match = re.search(r'Class\s*6\s+(.*?)\s+Class\s*7', clean_text, re.IGNORECASE)
+                                if subject_match:
+                                    subject = subject_match.group(1).replace('|', '').strip()
+                                elif '_' in name_without_ext:
+                                    subject = name_without_ext.split('_', 1)[1].strip()
+                                else:
+                                    subject = "Unknown Subject"
+                                    
+                                # 3. Nuclear Date Extraction
+                                raw_dates = re.findall(r'(\d{1,2})[^a-zA-Z0-9]*(\d{1,2})[^a-zA-Z0-9]*(202\d)', no_space_text)
+                                dates = []
+                                for d, m, y in raw_dates:
+                                    formatted_date = f"{int(d):02d}/{int(m):02d}/{y}"
+                                    if formatted_date not in dates:
+                                        dates.append(formatted_date)
+                                
+                                link_match = re.search(r'https?://[^\s]+', clean_text)
+                                zoom_link = link_match.group(0) if link_match else ""
+                                
+                                day_match = re.search(r'\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b', clean_text)
+                                day = day_match.group(0) if day_match else ""
+                                
+                                # 4. Fix Scrambled Times
+                                time_match = re.search(r'\d{1,2}:\d{2}\s*[AP]M\s*-\s*\d{1,2}:\d{2}\s*[AP]M', clean_text, re.IGNORECASE)
+                                if time_match:
+                                    time_str = time_match.group(0)
+                                else:
+                                    times = re.findall(r'\d{1,2}:\d{2}', clean_text)
+                                    if len(times) >= 2:
+                                        t_ints = [int(t.split(':')[0])*60 + int(t.split(':')[1]) for t in times[:2]]
+                                        sorted_times = [x for _, x in sorted(zip(t_ints, times[:2]))]
+                                        time_str = f"{sorted_times[0]} - {sorted_times[1]} PM"
+                                    else:
+                                        time_str = ""
+                                        
+                                # 5. Build the Rows
+                                if dates:
+                                    for i, date_val in enumerate(dates):
+                                        all_rows.append({
+                                            'Programme & Semester': programme,
+                                            'Subject Name': subject,
+                                            'Class': f"Class {i+1}",
+                                            'Day': day,
+                                            'Date': date_val,
+                                            'Time (PM)': time_str,
+                                            'Zoom Link': zoom_link
+                                        })
+                                else:
+                                    st.warning(f"⚠️ Skipped Page {page_num + 1}. No dates found.")
+                                    with st.expander(f"🔍 Diagnostic Raw Text for Page {page_num + 1}"):
+                                        st.write(combined_text)
+                                        
+                            except Exception as e:
+                                st.warning(f"⚠️ Error on Page {page_num + 1}: {e}")
+                                
                 except Exception as e:
                     st.error(f"❌ Critical error opening {file_name}: {e}")
         
