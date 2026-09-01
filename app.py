@@ -10,7 +10,7 @@ import pytesseract
 
 # Configure the web page
 st.set_page_config(page_title="SRM Schedule Consolidator", page_icon="🤖", layout="centered")
-st.title("SRM Schedule PDF Consolidator 🤖 (v7.0 - AI Vision)") 
+st.title("SRM Schedule PDF Consolidator 🤖 (v7.5 - 360° AI Vision)") 
 st.write("Drag and drop your PDF schedules below to instantly generate your formatted Excel sheet.")
 
 uploaded_files = st.file_uploader("Upload PDF files", type="pdf", accept_multiple_files=True)
@@ -19,19 +19,26 @@ if uploaded_files:
     if st.button("Process Files"):
         all_rows = []
         
-        with st.spinner("Taking snapshots and running AI Vision (OCR)... this may take a moment!"):
+        with st.spinner("Taking snapshots and running 360° AI Vision... this may take a moment!"):
             for file in uploaded_files:
                 file_name = file.name
                 try:
                     file_bytes = file.getvalue()
                     
-                    # Convert the PDF pages directly into high-res images!
+                    # Convert the PDF pages directly into high-res images
                     images = pdf2image.convert_from_bytes(file_bytes, dpi=300)
                     
                     for page_num, img in enumerate(images):
                         try:
-                            # Use AI to read the text visually from the image
+                            # 1st Pass: Standard orientation
                             page_text = pytesseract.image_to_string(img)
+                            
+                            # If the PDF was printed upside-down (like Group G), the dates will be missing
+                            # Let's check if we found a year (202x) in the text
+                            if not re.search(r'202\d', page_text):
+                                # 2nd Pass: Rotate the image 180 degrees and read it again!
+                                img_rotated = img.rotate(180)
+                                page_text = pytesseract.image_to_string(img_rotated)
                             
                             if not page_text or page_text.strip() == "":
                                 continue
@@ -56,7 +63,6 @@ if uploaded_files:
                                 subject = "Unknown Subject"
                                 
                             # 3. Nuclear Date Extraction
-                            # Finds dates even if OCR adds weird artifacts between numbers
                             raw_dates = re.findall(r'(\d{1,2})[^a-zA-Z0-9]*(\d{1,2})[^a-zA-Z0-9]*(202\d)', no_space_text)
                             dates = []
                             for d, m, y in raw_dates:
