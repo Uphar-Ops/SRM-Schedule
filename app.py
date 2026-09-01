@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import re
 import os
-import pdfplumber
+from PyPDF2 import PdfReader
 from io import BytesIO
 import openpyxl
 from openpyxl.styles import Alignment
@@ -18,84 +18,83 @@ if uploaded_files:
     if st.button("Process Files"):
         all_rows = []
         
-        with st.spinner("Extracting and formatting data using advanced reader..."):
+        with st.spinner("Extracting and formatting data..."):
             for file in uploaded_files:
                 file_name = file.name
                 try:
-                    # Upgrade to pdfplumber for flawless table reading
-                    with pdfplumber.open(file) as pdf:
-                        for page_num, page in enumerate(pdf.pages):
-                            try:
-                                page_text = page.extract_text()
-                                if not page_text:
-                                    continue
-                                    
-                                clean_text = re.sub(r'\s+', ' ', page_text)
-                                no_space_text = re.sub(r'\s+', '', page_text)
+                    # MAGIC FIX #1: Reset the file cursor to the very beginning
+                    file.seek(0) 
+                    reader = PdfReader(file)
+                    
+                    for page_num, page in enumerate(reader.pages):
+                        try:
+                            page_text = page.extract_text()
+                            if not page_text:
+                                continue
                                 
-                                # 1. Extract Programme Name
-                                name_without_ext = os.path.splitext(file_name)[0]
-                                if '_' in name_without_ext:
-                                    programme = name_without_ext.split('_', 1)[0].strip()
+                            # Basic cleanup for Times and Subjects
+                            clean_text = re.sub(r'\s+', ' ', page_text)
+                            
+                            # MAGIC FIX #2: Aggressively destroy ANY invisible/unicode characters for Dates
+                            # This leaves ONLY letters, numbers, slashes, dots, and hyphens
+                            safe_date_text = re.sub(r'[^a-zA-Z0-9/.-]', '', page_text)
+                            
+                            # 1. Extract Programme Name
+                            name_without_ext = os.path.splitext(file_name)[0]
+                            if '_' in name_without_ext:
+                                programme = name_without_ext.split('_', 1)[0].strip()
+                            else:
+                                programme = name_without_ext.strip()
+                                
+                            # 2. Smart Subject Extraction
+                            subject_match = re.search(r'Class 6\s+(.*?)\s+Class 7', clean_text, re.IGNORECASE)
+                            if subject_match:
+                                subject = subject_match.group(1).replace('|', '').strip()
+                            elif '_' in name_without_ext:
+                                subject = name_without_ext.split('_', 1)[1].strip()
+                            else:
+                                subject = "Unknown Subject"
+                                
+                            # 3. Dates Extraction (Using the aggressively cleaned text)
+                            dates = list(dict.fromkeys(re.findall(r'\d{2}[/.-]\d{2}[/.-]\d{4}', safe_date_text)))
+                            
+                            link_match = re.search(r'https?://[^\s]+', clean_text)
+                            zoom_link = link_match.group(0) if link_match else ""
+                            
+                            day_match = re.search(r'\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b', clean_text)
+                            day = day_match.group(0) if day_match else ""
+                            
+                            # 4. Fix Scrambled Times
+                            time_match = re.search(r'\d{1,2}:\d{2}\s*[AP]M\s*-\s*\d{1,2}:\d{2}\s*[AP]M', clean_text, re.IGNORECASE)
+                            if time_match:
+                                time_str = time_match.group(0)
+                            else:
+                                times = re.findall(r'\d{1,2}:\d{2}', clean_text)
+                                if len(times) >= 2:
+                                    t_ints = [int(t.split(':')[0])*60 + int(t.split(':')[1]) for t in times[:2]]
+                                    sorted_times = [x for _, x in sorted(zip(t_ints, times[:2]))]
+                                    time_str = f"{sorted_times[0]} - {sorted_times[1]} PM"
                                 else:
-                                    programme = name_without_ext.strip()
+                                    time_str = ""
                                     
-                                # 2. Smart Subject Extraction
-                                subject_match = re.search(r'Class 6\s+(.*?)\s+Class 7', clean_text, re.IGNORECASE)
-                                if subject_match:
-                                    subject = subject_match.group(1).replace('|', '').strip()
-                                elif '_' in name_without_ext:
-                                    subject = name_without_ext.split('_', 1)[1].strip()
-                                else:
-                                    subject = "Unknown Subject"
-                                    
-                                # 3. Advanced Date Extraction
-                                # Try standard formats first (13/09/2026 or 13-09-2026)
-                                raw_dates = re.findall(r'\d{2}[/.-]\d{2}[/.-]\d{4}', no_space_text)
-                                if not raw_dates:
-                                    # Fallback: If slashes are missing entirely, look for 8-digit strings (13092026)
-                                    fallback = re.findall(r'[0-3]\d[0-1]\d202[6-9]', no_space_text)
-                                    raw_dates = [f"{d[:2]}/{d[2:4]}/{d[4:]}" for d in fallback]
-                                    
-                                dates = list(dict.fromkeys(raw_dates))
+                            # 5. Build the Rows
+                            if dates:
+                                for i, date_val in enumerate(dates):
+                                    all_rows.append({
+                                        'Programme & Semester': programme,
+                                        'Subject Name': subject,
+                                        'Class': f"Class {i+1}",
+                                        'Day': day,
+                                        'Date': date_val,
+                                        'Time (PM)': time_str,
+                                        'Zoom Link': zoom_link
+                                    })
+                            else:
+                                st.warning(f"⚠️ Skipped Page {page_num + 1} of '{file_name}' (No dates found).")
                                 
-                                link_match = re.search(r'https?://[^\s]+', clean_text)
-                                zoom_link = link_match.group(0) if link_match else ""
-                                
-                                day_match = re.search(r'\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b', clean_text)
-                                day = day_match.group(0) if day_match else ""
-                                
-                                # 4. Fix Scrambled Times
-                                time_match = re.search(r'\d{1,2}:\d{2}\s*[AP]M\s*-\s*\d{1,2}:\d{2}\s*[AP]M', clean_text, re.IGNORECASE)
-                                if time_match:
-                                    time_str = time_match.group(0)
-                                else:
-                                    times = re.findall(r'\d{1,2}:\d{2}', clean_text)
-                                    if len(times) >= 2:
-                                        t_ints = [int(t.split(':')[0])*60 + int(t.split(':')[1]) for t in times[:2]]
-                                        sorted_times = [x for _, x in sorted(zip(t_ints, times[:2]))]
-                                        time_str = f"{sorted_times[0]} - {sorted_times[1]} PM"
-                                    else:
-                                        time_str = ""
-                                        
-                                # 5. Build the Rows
-                                if dates:
-                                    for i, date_val in enumerate(dates):
-                                        all_rows.append({
-                                            'Programme & Semester': programme,
-                                            'Subject Name': subject,
-                                            'Class': f"Class {i+1}",
-                                            'Day': day,
-                                            'Date': date_val,
-                                            'Time (PM)': time_str,
-                                            'Zoom Link': zoom_link
-                                        })
-                                else:
-                                    st.warning(f"⚠️ Skipped Page {page_num + 1} of '{file_name}' (No dates found).")
-                                    
-                            except Exception as e:
-                                st.warning(f"⚠️ Error on Page {page_num + 1} of '{file_name}': {e}")
-                                
+                        except Exception as e:
+                            st.warning(f"⚠️ Error on Page {page_num + 1} of '{file_name}': {e}")
+                            
                 except Exception as e:
                     st.error(f"❌ Critical error opening {file_name}: {e}")
         
