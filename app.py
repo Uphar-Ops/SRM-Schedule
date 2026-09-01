@@ -2,14 +2,14 @@ import streamlit as st
 import pandas as pd
 import re
 import os
-import fitz  # PyMuPDF
+from PyPDF2 import PdfReader
 from io import BytesIO
 import openpyxl
 from openpyxl.styles import Alignment
 
 # Configure the web page
 st.set_page_config(page_title="SRM Schedule Consolidator", page_icon="🤖", layout="centered")
-st.title("SRM Schedule PDF Consolidator 🤖 (v4.0)") 
+st.title("SRM Schedule PDF Consolidator 🤖 (v5.0)") 
 st.write("Drag and drop your PDF schedules below to instantly generate your formatted Excel sheet.")
 
 uploaded_files = st.file_uploader("Upload PDF files", type="pdf", accept_multiple_files=True)
@@ -18,25 +18,23 @@ if uploaded_files:
     if st.button("Process Files"):
         all_rows = []
         
-        with st.spinner("Extracting with PyMuPDF engine..."):
+        with st.spinner("Executing Nuclear Extraction..."):
             for file in uploaded_files:
                 file_name = file.name
                 try:
-                    # Load bytes into PyMuPDF
                     file_bytes = file.getvalue()
-                    doc = fitz.open(stream=file_bytes, filetype="pdf")
+                    reader = PdfReader(BytesIO(file_bytes))
                     
-                    for page_num in range(len(doc)):
+                    for page_num, page in enumerate(reader.pages):
                         try:
-                            page = doc[page_num]
-                            # Force extraction of all text elements
-                            page_text = page.get_text("text")
-                            
-                            if not page_text or page_text.strip() == "":
+                            page_text = page.extract_text()
+                            if not page_text:
                                 continue
                                 
                             clean_text = re.sub(r'\s+', ' ', page_text)
-                            safe_date_text = re.sub(r'[^a-zA-Z0-9/.-]', '', page_text)
+                            
+                            # Remove ALL spaces to fuse broken numbers together (e.g. "1 3" -> "13")
+                            no_space_text = re.sub(r'\s+', '', page_text)
                             
                             # 1. Extract Programme Name
                             name_without_ext = os.path.splitext(file_name)[0]
@@ -54,8 +52,13 @@ if uploaded_files:
                             else:
                                 subject = "Unknown Subject"
                                 
-                            # 3. Advanced Date Extraction
-                            dates = list(dict.fromkeys(re.findall(r'\d{2}[/.-]\d{2}[/.-]\d{4}', safe_date_text)))
+                            # 3. THE NUCLEAR DATE EXTRACTION
+                            # This regex finds a day, a month, and a year (202x) regardless of what 
+                            # invisible garbage characters, pipes, or symbols are between them!
+                            raw_matches = re.findall(r'([0-3]\d)[^a-zA-Z0-9]*([0-1]\d)[^a-zA-Z0-9]*(202\d)', no_space_text)
+                            
+                            # Format them cleanly back into dd/mm/yyyy
+                            dates = list(dict.fromkeys([f"{m[0]}/{m[1]}/{m[2]}" for m in raw_matches]))
                             
                             link_match = re.search(r'https?://[^\s]+', clean_text)
                             zoom_link = link_match.group(0) if link_match else ""
@@ -89,12 +92,12 @@ if uploaded_files:
                                         'Zoom Link': zoom_link
                                     })
                             else:
-                                st.warning(f"⚠️ Skipped Page {page_num + 1} of '{file_name}' (No dates found).")
+                                # SELF-DIAGNOSTIC: If it fails, it will print exactly what the computer sees!
+                                st.warning(f"⚠️ Skipped Page {page_num + 1}. No dates found.")
+                                st.info(f"🔍 Diagnostic Raw Text: {no_space_text[:200]}...")
                                 
                         except Exception as e:
                             st.warning(f"⚠️ Error on Page {page_num + 1} of '{file_name}': {e}")
-                    
-                    doc.close()
                             
                 except Exception as e:
                     st.error(f"❌ Critical error opening {file_name}: {e}")
