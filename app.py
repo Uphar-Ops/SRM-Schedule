@@ -24,78 +24,80 @@ if uploaded_files:
                 try:
                     reader = PdfReader(file)
                     
-                    # 1. PROCESS PAGE-BY-PAGE (Fixes multi-subject PDFs)
+                    # Process independently page-by-page to prevent full-file crashes
                     for page_num, page in enumerate(reader.pages):
-                        page_text = page.extract_text()
-                        if not page_text:
-                            continue
-                            
-                        # Clean up formatting anomalies 
-                        clean_text = re.sub(r'\s+', ' ', page_text)
-                        
-                        # Aggressively strip spaces to guarantee dates are found
-                        no_space_text = re.sub(r'\s+', '', page_text)
-                        
-                        # 2. Extract Programme Name
-                        name_without_ext = os.path.splitext(file_name)[0]
-                        if '_' in name_without_ext:
-                            programme = name_without_ext.split('_', 1)[0].strip()
-                        else:
-                            programme = name_without_ext.strip()
-                            
-                        # 3. Smart Subject Extraction
-                        # Because of how the table is merged, the subject is almost always dumped right between "Class 6" and "Class 7"
-                        subject_match = re.search(r'Class 6\s+(.*?)\s+Class 7', clean_text, re.IGNORECASE)
-                        if subject_match:
-                            subject = subject_match.group(1).replace('|', '').strip()
-                        elif '_' in name_without_ext:
-                            subject = name_without_ext.split('_', 1)[1].strip()
-                        else:
-                            subject = "Unknown Subject"
-                            
-                        # 4. Regex Extractions
-                        # Find unique dates using the aggressively cleaned text
-                        dates = list(dict.fromkeys(re.findall(r'\d{2}/\d{2}/\d{4}', no_space_text)))
-                        
-                        link_match = re.search(r'https?://[^\s]+', clean_text)
-                        zoom_link = link_match.group(0) if link_match else ""
-                        
-                        day_match = re.search(r'\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b', clean_text)
-                        day = day_match.group(0) if day_match else ""
-                        
-                        # 5. Fix Scrambled Times (e.g., "- 7:00 6:00 PM PM")
-                        time_match = re.search(r'\d{1,2}:\d{2}\s*[AP]M\s*-\s*\d{1,2}:\d{2}\s*[AP]M', clean_text, re.IGNORECASE)
-                        if time_match:
-                            time_str = time_match.group(0)
-                        else:
-                            # Fallback: Find the two raw times and sort them logically
-                            times = re.findall(r'\d{1,2}:\d{2}', clean_text)
-                            if len(times) >= 2:
-                                t_ints = [int(t.split(':')[0])*60 + int(t.split(':')[1]) for t in times[:2]]
-                                sorted_times = [x for _, x in sorted(zip(t_ints, times[:2]))]
-                                time_str = f"{sorted_times[0]} - {sorted_times[1]} PM"
-                            else:
-                                time_str = ""
+                        try:
+                            page_text = page.extract_text()
+                            if not page_text:
+                                continue
                                 
-                        # 6. Build the Rows for this specific page
-                        if dates:
-                            for i, date_val in enumerate(dates):
-                                all_rows.append({
-                                    'Programme & Semester': programme,
-                                    'Subject Name': subject,
-                                    'Class': f"Class {i+1}",
-                                    'Day': day,
-                                    'Date': date_val,
-                                    'Time (PM)': time_str,
-                                    'Zoom Link': zoom_link
-                                })
+                            clean_text = re.sub(r'\s+', ' ', page_text)
+                            no_space_text = re.sub(r'\s+', '', page_text)
+                            
+                            # 1. Extract Programme Name safely
+                            name_without_ext = os.path.splitext(file_name)[0]
+                            if '_' in name_without_ext:
+                                programme = name_without_ext.split('_', 1)[0].strip()
+                            else:
+                                programme = name_without_ext.strip()
+                                
+                            # 2. Smart Subject Extraction (Plucks it straight out of the table)
+                            subject_match = re.search(r'Class 6\s+(.*?)\s+Class 7', clean_text, re.IGNORECASE)
+                            if subject_match:
+                                subject = subject_match.group(1).replace('|', '').strip()
+                            elif '_' in name_without_ext:
+                                subject = name_without_ext.split('_', 1)[1].strip()
+                            else:
+                                subject = "Unknown Subject"
+                                
+                            # 3. Dates (Now supports both / and - as separators)
+                            dates = list(dict.fromkeys(re.findall(r'\d{2}[/-]\d{2}[/-]\d{4}', no_space_text)))
+                            
+                            link_match = re.search(r'https?://[^\s]+', clean_text)
+                            zoom_link = link_match.group(0) if link_match else ""
+                            
+                            day_match = re.search(r'\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b', clean_text)
+                            day = day_match.group(0) if day_match else ""
+                            
+                            # 4. Fix Scrambled Times
+                            time_match = re.search(r'\d{1,2}:\d{2}\s*[AP]M\s*-\s*\d{1,2}:\d{2}\s*[AP]M', clean_text, re.IGNORECASE)
+                            if time_match:
+                                time_str = time_match.group(0)
+                            else:
+                                times = re.findall(r'\d{1,2}:\d{2}', clean_text)
+                                if len(times) >= 2:
+                                    t_ints = [int(t.split(':')[0])*60 + int(t.split(':')[1]) for t in times[:2]]
+                                    sorted_times = [x for _, x in sorted(zip(t_ints, times[:2]))]
+                                    time_str = f"{sorted_times[0]} - {sorted_times[1]} PM"
+                                else:
+                                    time_str = ""
+                                    
+                            # 5. Build the Rows
+                            if dates:
+                                for i, date_val in enumerate(dates):
+                                    all_rows.append({
+                                        'Programme & Semester': programme,
+                                        'Subject Name': subject,
+                                        'Class': f"Class {i+1}",
+                                        'Day': day,
+                                        'Date': date_val,
+                                        'Time (PM)': time_str,
+                                        'Zoom Link': zoom_link
+                                    })
+                            else:
+                                # Show a gentle warning if a page has no schedule, rather than crashing
+                                st.warning(f"⚠️ Skipped Page {page_num + 1} of '{file_name}' (No dates found).")
+                                
+                        except Exception as e:
+                            st.warning(f"⚠️ Error on Page {page_num + 1} of '{file_name}': {e}")
+                            
                 except Exception as e:
-                    st.error(f"Error processing {file_name}: {e}")
+                    st.error(f"❌ Critical error opening {file_name}: {e}")
         
-        # 7. Format and Output
+        # 6. Format and Output
         if all_rows:
             df = pd.DataFrame(all_rows)
-            st.success(f"✅ Successfully processed {len(uploaded_files)} files!")
+            st.success(f"✅ Successfully processed {len(all_rows)} total classes!")
             
             output = BytesIO()
             df.to_excel(output, index=False, sheet_name="Schedule")
@@ -128,4 +130,4 @@ if uploaded_files:
                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             )
         else:
-            st.warning("No valid data could be extracted. Please check your PDFs.")
+            st.error("No valid data could be extracted. Please check your PDFs.")
