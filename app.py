@@ -2,14 +2,15 @@ import streamlit as st
 import pandas as pd
 import re
 import os
-import pdfplumber
 from io import BytesIO
 import openpyxl
 from openpyxl.styles import Alignment
+import pdfplumber
+import pytesseract
 
 # Configure the web page
 st.set_page_config(page_title="SRM Schedule Consolidator", page_icon="🤖", layout="centered")
-st.title("SRM Schedule PDF Consolidator 🤖 (v9.0 - True Mirror)") 
+st.title("SRM Schedule PDF Consolidator 🤖 (v10.0 - Omni-AI)") 
 st.write("Drag and drop your PDF schedules below to instantly generate your formatted Excel sheet.")
 
 uploaded_files = st.file_uploader("Upload PDF files", type="pdf", accept_multiple_files=True)
@@ -18,37 +19,35 @@ if uploaded_files:
     if st.button("Process Files"):
         all_rows = []
         
-        with st.spinner("Ripping hidden grid and decoding matrix..."):
+        with st.spinner("Initializing Omni-Directional AI (Taking high-res photos)..."):
             for file in uploaded_files:
                 file_name = file.name
                 try:
                     file_bytes = file.getvalue()
                     
-                    # Using pdfplumber to rip the table structure out of the PDF
                     with pdfplumber.open(BytesIO(file_bytes)) as pdf:
                         for page_num, page in enumerate(pdf.pages):
                             try:
-                                # 1. Extract standard surface text
-                                page_text = page.extract_text() or ""
+                                # Render the page physically as an image
+                                im = page.to_image(resolution=300).original
                                 
-                                # 2. Extract deep grid text
-                                tables = page.extract_tables()
-                                table_text = ""
-                                for table in tables:
-                                    for row in table:
-                                        table_text += " ".join([str(cell) for cell in row if cell is not None]) + " "
-                                        
-                                combined_text = page_text + " \n " + table_text
-                                
-                                # ==========================================
-                                # THE TRUE MIRROR DECODER (v9.0)
-                                # If the text is backwards, flip the entire string!
-                                # ==========================================
-                                if "ssalC" in combined_text or "elbaT" in combined_text or "6202" in combined_text:
-                                    combined_text = combined_text[::-1]
+                                page_text = ""
+                                # Try all 4 rotations to defeat the upside-down PDF trick!
+                                for angle in [0, 180, 90, 270]:
+                                    rotated_im = im.rotate(angle, expand=True)
+                                    # psm 6 = Forces AI to read tables perfectly left-to-right
+                                    text = pytesseract.image_to_string(rotated_im, config='--psm 6')
                                     
-                                clean_text = re.sub(r'\s+', ' ', combined_text)
-                                no_space_text = re.sub(r'\s+', '', combined_text)
+                                    # If it clearly sees a year, we have the correct orientation!
+                                    if re.search(r'202\d', text):
+                                        page_text = text
+                                        break
+                                        
+                                if not page_text:
+                                    page_text = pytesseract.image_to_string(im, config='--psm 6')
+                                    
+                                clean_text = re.sub(r'\s+', ' ', page_text)
+                                no_space_text = re.sub(r'\s+', '', page_text)
                                 
                                 # 1. Extract Programme Name
                                 name_without_ext = os.path.splitext(file_name)[0]
@@ -57,8 +56,8 @@ if uploaded_files:
                                 else:
                                     programme = name_without_ext.strip()
                                     
-                                # 2. Smart Subject Extraction
-                                subject_match = re.search(r'Class\s*6\s+(.*?)\s+Class\s*7', clean_text, re.IGNORECASE)
+                                # 2. Smart Subject Extraction (Fuzzy logic in case AI misreads a letter)
+                                subject_match = re.search(r'C[l1I]a[s5]{1,2}\s*6\s+(.*?)\s+C[l1I]a[s5]{1,2}\s*7', clean_text, re.IGNORECASE)
                                 if subject_match:
                                     subject = subject_match.group(1).replace('|', '').strip()
                                 elif '_' in name_without_ext:
@@ -80,16 +79,16 @@ if uploaded_files:
                                 day_match = re.search(r'\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b', clean_text)
                                 day = day_match.group(0) if day_match else ""
                                 
-                                # 4. Fix Scrambled Times
-                                time_match = re.search(r'\d{1,2}:\d{2}\s*[AP]M\s*-\s*\d{1,2}:\d{2}\s*[AP]M', clean_text, re.IGNORECASE)
+                                # 4. Fix Scrambled Times (AI sometimes reads ':' as '.')
+                                time_match = re.search(r'\d{1,2}[:.]\d{2}\s*[AP]M\s*-\s*\d{1,2}[:.]\d{2}\s*[AP]M', clean_text, re.IGNORECASE)
                                 if time_match:
-                                    time_str = time_match.group(0)
+                                    time_str = time_match.group(0).replace('.', ':')
                                 else:
-                                    times = re.findall(r'\d{1,2}:\d{2}', clean_text)
+                                    times = re.findall(r'\d{1,2}[:.]\d{2}', clean_text)
                                     if len(times) >= 2:
-                                        t_ints = [int(t.split(':')[0])*60 + int(t.split(':')[1]) for t in times[:2]]
+                                        t_ints = [int(t.replace('.', ':').split(':')[0])*60 + int(t.replace('.', ':').split(':')[1]) for t in times[:2]]
                                         sorted_times = [x for _, x in sorted(zip(t_ints, times[:2]))]
-                                        time_str = f"{sorted_times[0]} - {sorted_times[1]} PM"
+                                        time_str = f"{sorted_times[0].replace('.', ':')} - {sorted_times[1].replace('.', ':')} PM"
                                     else:
                                         time_str = ""
                                         
@@ -107,8 +106,8 @@ if uploaded_files:
                                         })
                                 else:
                                     st.warning(f"⚠️ Skipped Page {page_num + 1}. No dates found.")
-                                    with st.expander(f"🔍 Diagnostic Raw Text for Page {page_num + 1}"):
-                                        st.write(combined_text)
+                                    with st.expander(f"🔍 OCR Diagnostic Text for Page {page_num + 1}"):
+                                        st.write(clean_text)
                                         
                             except Exception as e:
                                 st.warning(f"⚠️ Error on Page {page_num + 1}: {e}")
@@ -152,4 +151,4 @@ if uploaded_files:
                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             )
         else:
-            st.error("No valid data could be extracted.")
+            st.error("No valid data could be extracted. Please check your PDFs.")
