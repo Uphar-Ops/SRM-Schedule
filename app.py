@@ -2,15 +2,14 @@ import streamlit as st
 import pandas as pd
 import re
 import os
+from PyPDF2 import PdfReader
 from io import BytesIO
 import openpyxl
 from openpyxl.styles import Alignment
-import pdf2image
-import pytesseract
 
 # Configure the web page
 st.set_page_config(page_title="SRM Schedule Consolidator", page_icon="🤖", layout="centered")
-st.title("SRM Schedule PDF Consolidator 🤖 (v7.5 - 360° AI Vision)") 
+st.title("SRM Schedule PDF Consolidator 🤖 (v8.0 - Mirror Decoder)") 
 st.write("Drag and drop your PDF schedules below to instantly generate your formatted Excel sheet.")
 
 uploaded_files = st.file_uploader("Upload PDF files", type="pdf", accept_multiple_files=True)
@@ -19,29 +18,26 @@ if uploaded_files:
     if st.button("Process Files"):
         all_rows = []
         
-        with st.spinner("Taking snapshots and running 360° AI Vision... this may take a moment!"):
+        with st.spinner("Decoding PDF Matrix..."):
             for file in uploaded_files:
                 file_name = file.name
                 try:
                     file_bytes = file.getvalue()
+                    reader = PdfReader(BytesIO(file_bytes))
                     
-                    # Convert the PDF pages directly into high-res images
-                    images = pdf2image.convert_from_bytes(file_bytes, dpi=300)
-                    
-                    for page_num, img in enumerate(images):
+                    for page_num, page in enumerate(reader.pages):
                         try:
-                            # 1st Pass: Standard orientation
-                            page_text = pytesseract.image_to_string(img)
-                            
-                            # If the PDF was printed upside-down (like Group G), the dates will be missing
-                            # Let's check if we found a year (202x) in the text
-                            if not re.search(r'202\d', page_text):
-                                # 2nd Pass: Rotate the image 180 degrees and read it again!
-                                img_rotated = img.rotate(180)
-                                page_text = pytesseract.image_to_string(img_rotated)
-                            
-                            if not page_text or page_text.strip() == "":
+                            page_text = page.extract_text()
+                            if not page_text:
                                 continue
+                                
+                            # ==========================================
+                            # THE MIRROR DECODER (v8.0)
+                            # Detect if the PDF text layer is written backwards
+                            # (e.g. "ssalC" instead of "Class")
+                            # ==========================================
+                            if "ssalC" in page_text or "elbaT" in page_text or "noisseS" in page_text:
+                                page_text = page_text[::-1] # Flips the entire string!
                                 
                             clean_text = re.sub(r'\s+', ' ', page_text)
                             no_space_text = re.sub(r'\s+', '', page_text)
@@ -102,9 +98,7 @@ if uploaded_files:
                                         'Zoom Link': zoom_link
                                     })
                             else:
-                                st.warning(f"⚠️ Skipped Page {page_num + 1}. No dates found via AI Vision.")
-                                with st.expander(f"🔍 Click to view OCR TEXT for Page {page_num + 1}"):
-                                    st.code(page_text)
+                                st.warning(f"⚠️ Skipped Page {page_num + 1}. No dates found.")
                                 
                         except Exception as e:
                             st.warning(f"⚠️ Error on Page {page_num + 1}: {e}")
@@ -115,7 +109,7 @@ if uploaded_files:
         # 6. Format and Output
         if all_rows:
             df = pd.DataFrame(all_rows)
-            st.success(f"✅ Successfully processed {len(all_rows)} total classes using AI Vision!")
+            st.success(f"✅ Successfully processed {len(all_rows)} total classes!")
             
             output = BytesIO()
             df.to_excel(output, index=False, sheet_name="Schedule")
